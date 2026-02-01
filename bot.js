@@ -143,22 +143,25 @@ export async function handleBot(token, update) {
 
     let targetId = null;
 
-    if (update.message.reply_to_message) {
-      targetId = update.message.reply_to_message.from.id;
-    }
-
-    if (!targetId && update.message.entities) {
-      const ent = update.message.entities.find(e => e.type === "mention");
-      if (ent) {
+// Prioritaskan reply
+if (update.message.reply_to_message) {
+    targetId = update.message.reply_to_message.from.id;
+} 
+// Baru cek mention jika tidak ada reply
+else if (update.message.entities) {
+    const ent = update.message.entities.find(e => e.type === "mention" || e.type === "text_mention");
+    if (ent?.type === "mention") {
         const username = text.slice(ent.offset + 1, ent.offset + ent.length);
         const r = await fetch(`${API}/getChatMember`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatIdMsg, user_id: `@${username}` })
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatIdMsg, user_id: `@${username}` })
         }).then(r => r.json());
         targetId = r?.result?.user?.id;
-      }
+    } else if (ent?.type === "text_mention") {
+        targetId = ent.user.id;
     }
+}
 
     if (!targetId && update.message.entities) {
       const ent = update.message.entities.find(e => e.type === "text_mention");
