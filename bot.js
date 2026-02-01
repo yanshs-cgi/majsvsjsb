@@ -101,7 +101,7 @@ export async function handleBot(token, update) {
     return r.json();
   }
 
-  const text = update.message?.text;
+  const text = update.message?.text || update.message?.caption;
   const chatIdMsg = update.message?.chat?.id;
 
   // Simpan member untuk tagall
@@ -166,7 +166,7 @@ export async function handleBot(token, update) {
     }
 
     if (!targetId)
-      return send(chatIdMsg, "❌ Reply pesan atau `.kick @user`");
+      return send(chatIdMsg, "❌ Reply pesan atau `.kick @user`.");
 
     if (await isAdmin(chatIdMsg, targetId))
       return send(chatIdMsg, "❌ Ga bisa kick admin.");
@@ -201,43 +201,63 @@ export async function handleBot(token, update) {
   ====================== */
   if (text?.startsWith(".ban") || text?.startsWith("/ban")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await kick(chatIdMsg, update.message.reply_to_message.from.id);
+    let tId = update.message.reply_to_message?.from?.id;
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
+    await kick(chatIdMsg, tId);
     return send(chatIdMsg, "✅ Banned.");
   }
 
   if (text?.startsWith(".unban")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await unban(chatIdMsg, update.message.reply_to_message.from.id);
+    let tId = update.message.reply_to_message?.from?.id;
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
+    await unban(chatIdMsg, tId);
     return send(chatIdMsg, "✅ Unbanned.");
   }
 
   if (text?.startsWith(".mute")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await mute(chatIdMsg, update.message.reply_to_message.from.id, Math.floor(Date.now() / 1000) + 3600);
+    let tId = update.message.reply_to_message?.from?.id;
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
+    await mute(chatIdMsg, tId, Math.floor(Date.now() / 1000) + 3600);
     return send(chatIdMsg, "🔇 Muted 1 jam.");
   }
 
   if (text?.startsWith(".unmute")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await unmute(chatIdMsg, update.message.reply_to_message.from.id);
+    let tId = update.message.reply_to_message?.from?.id;
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
+    await unmute(chatIdMsg, tId);
     return send(chatIdMsg, "🔊 Unmuted.");
   }
 
   if (text?.startsWith(".promote")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await promote(chatIdMsg, update.message.reply_to_message.from.id);
+    let tId = update.message.reply_to_message?.from?.id;
+    
+    if (!tId && update.message.entities) {
+      const ent = update.message.entities.find(e => e.type === "mention");
+      if (ent) {
+        const username = text.slice(ent.offset + 1, ent.offset + ent.length);
+        const r = await fetch(`${API}/getChatMember`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatIdMsg, user_id: `@${username}` })
+        }).then(r => r.json());
+        tId = r?.result?.user?.id;
+      }
+    }
+
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    await promote(chatIdMsg, tId);
     return send(chatIdMsg, "👮 Promoted.");
   }
 
   if (text?.startsWith(".demote")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan user.");
-    await demote(chatIdMsg, update.message.reply_to_message.from.id);
+    let tId = update.message.reply_to_message?.from?.id;
+    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
+    await demote(chatIdMsg, tId);
     return send(chatIdMsg, "📉 Demoted.");
   }
 
@@ -426,128 +446,8 @@ export async function handleBot(token, update) {
     });
   }
 
-  if (d === "grup_tagall") return send(chatId, "📣 *TAG ALL*\nKetik `.tagall` (Admin only)");
-  if (d === "grup_kick") return send(chatId, "❌ *KICK/BAN*\n`.kick @user` atau reply\n`.ban` reply user\n`.unban` reply user");
-  if (d === "grup_mute") return send(chatId, "🔇 *MUTE*\n`.mute` reply (1 jam)\n`.unmute` reply");
-  if (d === "grup_promote") return send(chatId, "👮 *PROMOTE*\n`.promote` reply\n`.demote` reply");
-  if (d === "grup_broadcast") return send(chatId, "📢 *BROADCAST*\n`.sharelink <pesan>`\nKirim ke semua grup yang pernah dikunjungi");
-
-  if (d === "menu_tools") {
-    return send(chatId, "*🛠️ MENU TOOLS*", {
-      inline_keyboard: [
-        [{ text: "🔐 Encode", callback_data: "tool_enc" }],
-        [{ text: "🔓 Decode", callback_data: "tool_dec" }],
-        [{ text: "🖼️ Get PP", callback_data: "tool_pp" }],
-        [{ text: "📷 Sticker to Img", callback_data: "tool_toimg" }],
-        [{ text: "🔢 Kalkulator", callback_data: "tool_calc" }],
-        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
-      ]
-    });
-  }
-
-  if (d === "tool_enc") return send(chatId, "🔐 *ENCODE*\n`.enc <teks>`");
-  if (d === "tool_dec") return send(chatId, "🔓 *DECODE*\n`.decode <base64>`");
-  if (d === "tool_pp") return send(chatId, "🖼️ *GET PP*\n`.getpp` atau reply user");
-  if (d === "tool_toimg") return send(chatId, "📷 *STICKER TO IMAGE*\n`.toimg` reply sticker");
-  if (d === "tool_calc") return send(chatId, "🔢 *KALKULATOR*\n`.calc 2+2*3`");
-
-  if (d === "menu_ai") {
-    return send(chatId, "*🤖 MENU AI*", {
-      inline_keyboard: [
-        [{ text: "💬 Gemini AI", callback_data: "ai_gemini" }],
-        [{ text: "📸 Remini HD", callback_data: "ai_remini" }],
-        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
-      ]
-    });
-  }
-
-  if (d === "ai_gemini") return send(chatId, "💬 *GEMINI AI*\n`.ai <pertanyaan>`");
-  if (d === "ai_remini") return send(chatId, "📸 *REMINI HD*\n`.remini` reply foto atau link");
-
-  if (d === "menu_game") {
-    return send(chatId, "*🎮 MENU GAME*", {
-      inline_keyboard: [
-        [{ text: "🎲 Dadu", callback_data: "game_dadu" }, { text: "🪙 Koin", callback_data: "game_koin" }],
-        [{ text: "🐚 Kerang", callback_data: "game_kerang" }, { text: "🎰 Slot", callback_data: "game_slot" }],
-        [{ text: "✊ Suit", callback_data: "game_suit" }, { text: "🔢 Random", callback_data: "game_random" }],
-        [{ text: "🤔 Truth", callback_data: "game_truth" }, { text: "😈 Dare", callback_data: "game_dare" }],
-        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
-      ]
-    });
-  }
-
-  if (d === "game_dadu") return send(chatId, `🎲 Dadu: *${Math.floor(Math.random() * 6) + 1}*`);
-  if (d === "game_koin") return send(chatId, Math.random() > 0.5 ? "🪙 *KEPALA*" : "🪙 *EKOR*");
-  if (d === "game_kerang") {
-    const a = ["Ya", "Tidak", "Mungkin", "Pasti!", "Bisa jadi"];
-    return send(chatId, `🐚 *Kerang:* ${a[Math.floor(Math.random() * a.length)]}`);
-  }
-  if (d === "game_slot") {
-    const s = ["🍎", "🍊", "🍋", "🍇", "🍒", "💎", "7️⃣"];
-    const r1 = s[Math.floor(Math.random() * s.length)], r2 = s[Math.floor(Math.random() * s.length)], r3 = s[Math.floor(Math.random() * s.length)];
-    return send(chatId, `🎰 [ ${r1} | ${r2} | ${r3} ]\n${r1 === r2 && r2 === r3 ? "🎉 JACKPOT!" : "😢 Coba lagi!"}`);
-  }
-  if (d === "game_suit") {
-    const c = ["🪨 Batu", "✂️ Gunting", "📄 Kertas"];
-    return send(chatId, `Bot: *${c[Math.floor(Math.random() * 3)]}*`);
-  }
-  if (d === "game_random") return send(chatId, `🎲 Angka: *${Math.floor(Math.random() * 100)}*`);
-  if (d === "game_truth") {
-    const t = ["Apa hal paling memalukan?", "Siapa crush kamu?", "Rahasia terbesar?"];
-    return send(chatId, `🤔 *TRUTH:* ${t[Math.floor(Math.random() * t.length)]}`);
-  }
-  if (d === "game_dare") {
-    const t = ["Kirim 'I love you' ke chat terakhir!", "Voice note nyanyi!"];
-    return send(chatId, `😈 *DARE:* ${t[Math.floor(Math.random() * t.length)]}`);
-  }
-
-  if (d === "menu_fun") {
-    return send(chatId, "*🔮 MENU FUN*", {
-      inline_keyboard: [
-        [{ text: "💬 Quote", callback_data: "fun_quote" }, { text: "📖 Fakta", callback_data: "fun_fakta" }],
-        [{ text: "⭐ Rate", callback_data: "fun_rate" }, { text: "💕 Ship", callback_data: "fun_ship" }],
-        [{ text: "✨ Ganteng/Cantik", callback_data: "fun_meter" }],
-        [{ text: "📜 Pantun", callback_data: "fun_pantun" }],
-        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
-      ]
-    });
-  }
-
-  if (d === "fun_quote") {
-    const q = ["Hidup seperti bersepeda. - Einstein", "Jadilah perubahan. - Gandhi"];
-    return send(chatId, `💬 _"${q[Math.floor(Math.random() * q.length)]}"_`);
-  }
-  if (d === "fun_fakta") {
-    const f = ["Jantung 100.000x/hari", "Gurita 3 jantung"];
-    return send(chatId, `📖 ${f[Math.floor(Math.random() * f.length)]}`);
-  }
-  if (d === "fun_rate") return send(chatId, "⭐ *RATE*\n`.rate <sesuatu>`");
-  if (d === "fun_ship") return send(chatId, `💕 *Love:* ${Math.floor(Math.random() * 101)}%`);
-  if (d === "fun_meter") return send(chatId, "✨ *METER*\n`.ganteng` atau `.cantik` reply user");
-  if (d === "fun_pantun") {
-    return send(chatId, "📜 Pergi ke pasar beli semangka,\nKalau kamu suka,\nJangan malu bilang cinta.");
-  }
-
-  if (d === "menu_download") {
-    return send(chatId, "*📥 MENU DOWNLOAD*", {
-      inline_keyboard: [
-        [{ text: "🎵 TikTok", callback_data: "dl_tiktok" }],
-        [{ text: "📷 Instagram", callback_data: "dl_ig" }],
-        [{ text: "🎬 YouTube", callback_data: "dl_yt" }],
-        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
-      ]
-    });
-  }
-
-  if (d === "dl_tiktok") return send(chatId, "🎵 *TIKTOK*\n`.tiktok <link>` (coming soon)");
-  if (d === "dl_ig") return send(chatId, "📷 *INSTAGRAM*\n`.ig <link>` (coming soon)");
-  if (d === "dl_yt") return send(chatId, "🎬 *YOUTUBE*\n`.yt <link>` (coming soon)");
-
-  if (d === "menu_info")
-    return send(chatId, "ℹ️ Bot aktif 24/7 via webhook.\n\n`.info` - Info user\n`.ping` - Cek bot\n`.runtime` - Uptime");
-
   if (d === "back_main") {
-    return send(chatId, "*📌 MENU UTAMA*", {
+    return send(chatId, "*📌 MENU UTAMA - 100+ FITUR*", {
       inline_keyboard: [
         [{ text: "👥 Menu Grup", callback_data: "menu_grup" }],
         [{ text: "🛠️ Menu Tools", callback_data: "menu_tools" }],
