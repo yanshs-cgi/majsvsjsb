@@ -101,13 +101,56 @@ export async function handleBot(token, update) {
     return r.json();
   }
 
+  // ===== FIXED: Helper untuk extract target user dari reply atau mention =====
+  async function getTargetUser(message, chatId) {
+    // Prioritas 1: Reply to message
+    if (message.reply_to_message && message.reply_to_message.from) {
+      return message.reply_to_message.from.id;
+    }
+    
+    // Prioritas 2: Text mention (user tanpa username)
+    if (message.entities) {
+      const textMention = message.entities.find(e => e.type === "text_mention");
+      if (textMention && textMention.user) {
+        return textMention.user.id;
+      }
+      
+      // Prioritas 3: @username mention
+      const mention = message.entities.find(e => e.type === "mention");
+      if (mention) {
+        const text = message.text || message.caption || "";
+        const username = text.slice(mention.offset + 1, mention.offset + mention.length);
+        try {
+          const members = groupMembers[chatId];
+          if (members) {
+            for (const uid in members) {
+              if (members[uid].username?.toLowerCase() === username.toLowerCase()) {
+                return parseInt(uid);
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error finding user by username:", e);
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  // Safety check
+  if (!update.message && !update.callback_query) return;
+
   const text = update.message?.text || update.message?.caption;
   const chatIdMsg = update.message?.chat?.id;
 
   // Simpan member untuk tagall
   if (update.message?.from?.id && (update.message?.chat?.type === "group" || update.message?.chat?.type === "supergroup")) {
     if (!groupMembers[chatIdMsg]) groupMembers[chatIdMsg] = {};
-    groupMembers[chatIdMsg][update.message.from.id] = { username: update.message.from.username, firstName: update.message.from.first_name };
+    groupMembers[chatIdMsg][update.message.from.id] = { 
+      username: update.message.from.username, 
+      firstName: update.message.from.first_name 
+    };
     visitedGroups[chatIdMsg] = { title: update.message.chat.title };
   }
 
@@ -137,39 +180,15 @@ export async function handleBot(token, update) {
     if (!(await isAdmin(chatIdMsg, fromId)))
       return send(chatIdMsg, "❌ Lu bukan admin.");
 
-    const botId = (await fetch(`${API}/getMe`).then(r => r.json())).result.id;
+    const botInfo = await fetch(`${API}/getMe`).then(r => r.json());
+    const botId = botInfo?.result?.id;
     if (!(await isAdmin(chatIdMsg, botId)))
       return send(chatIdMsg, "❌ Bot belum admin.");
 
-    let targetId = null;
-
-// Prioritaskan reply
-if (update.message.reply_to_message) {
-    targetId = update.message.reply_to_message.from.id;
-} 
-// Baru cek mention jika tidak ada reply
-else if (update.message.entities) {
-    const ent = update.message.entities.find(e => e.type === "mention" || e.type === "text_mention");
-    if (ent?.type === "mention") {
-        const username = text.slice(ent.offset + 1, ent.offset + ent.length);
-        const r = await fetch(`${API}/getChatMember`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: chatIdMsg, user_id: `@${username}` })
-        }).then(r => r.json());
-        targetId = r?.result?.user?.id;
-    } else if (ent?.type === "text_mention") {
-        targetId = ent.user.id;
-    }
-}
-
-    if (!targetId && update.message.entities) {
-      const ent = update.message.entities.find(e => e.type === "text_mention");
-      if (ent) targetId = ent.user.id;
-    }
+    const targetId = await getTargetUser(update.message, chatIdMsg);
 
     if (!targetId)
-      return send(chatIdMsg, "❌ Reply pesan atau `.kick @user`.");
+      return send(chatIdMsg, "❌ Reply pesan user atau `.kick @user`.");
 
     if (await isAdmin(chatIdMsg, targetId))
       return send(chatIdMsg, "❌ Ga bisa kick admin.");
@@ -179,7 +198,7 @@ else if (update.message.entities) {
   }
 
   /* =====================
-     COMMAND TAGALL (FIXED)
+     COMMAND TAGALL
   ====================== */
   if (text === ".tagall" || text === "/tagall") {
     const fromId = update.message.from.id;
@@ -200,78 +219,84 @@ else if (update.message.entities) {
   }
 
   /* =====================
-     GRUP COMMANDS
+     GRUP COMMANDS (FIXED)
   ====================== */
   if (text?.startsWith(".ban") || text?.startsWith("/ban")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
-    await kick(chatIdMsg, tId);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    if (await isAdmin(chatIdMsg, targetId)) return send(chatIdMsg, "❌ Ga bisa ban admin.");
+    await kick(chatIdMsg, targetId);
     return send(chatIdMsg, "✅ Banned.");
   }
 
   if (text?.startsWith(".unban")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
-    await unban(chatIdMsg, tId);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    await unban(chatIdMsg, targetId);
     return send(chatIdMsg, "✅ Unbanned.");
   }
 
   if (text?.startsWith(".mute")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
-    await mute(chatIdMsg, tId, Math.floor(Date.now() / 1000) + 3600);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    if (await isAdmin(chatIdMsg, targetId)) return send(chatIdMsg, "❌ Ga bisa mute admin.");
+    await mute(chatIdMsg, targetId, Math.floor(Date.now() / 1000) + 3600);
     return send(chatIdMsg, "🔇 Muted 1 jam.");
   }
 
   if (text?.startsWith(".unmute")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
-    await unmute(chatIdMsg, tId);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    await unmute(chatIdMsg, targetId);
     return send(chatIdMsg, "🔊 Unmuted.");
   }
 
   if (text?.startsWith(".promote")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    
-    if (!tId && update.message.entities) {
-      const ent = update.message.entities.find(e => e.type === "mention");
-      if (ent) {
-        const username = text.slice(ent.offset + 1, ent.offset + ent.length);
-        const r = await fetch(`${API}/getChatMember`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatIdMsg, user_id: `@${username}` })
-        }).then(r => r.json());
-        tId = r?.result?.user?.id;
-      }
-    }
-
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
-    await promote(chatIdMsg, tId);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    await promote(chatIdMsg, targetId);
     return send(chatIdMsg, "👮 Promoted.");
   }
 
   if (text?.startsWith(".demote")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
-    let tId = update.message.reply_to_message?.from?.id;
-    if (!tId) return send(chatIdMsg, "❌ Reply pesan user.");
-    await demote(chatIdMsg, tId);
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    await demote(chatIdMsg, targetId);
     return send(chatIdMsg, "📉 Demoted.");
   }
 
+  /* =====================
+     SHARELINK/BROADCAST (FIXED)
+  ====================== */
   if (text?.startsWith(".sharelink") || text?.startsWith(".broadcast")) {
     if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
     const msg = text.replace(/^\.(sharelink|broadcast)\s*/, "");
     if (!msg) return send(chatIdMsg, "❌ `.sharelink <pesan>`");
+    
     const groups = Object.keys(visitedGroups);
+    
+    if (groups.length === 0) {
+      return send(chatIdMsg, "⚠️ Belum ada grup tersimpan. Bot perlu aktif di grup-grup lain dulu.");
+    }
+    
     let count = 0;
-    for (const gid of groups) { try { await send(gid, `📢 *BROADCAST*\n\n${msg}`); count++; } catch {} }
-    return send(chatIdMsg, `✅ Terkirim ke ${count} grup.`);
+    let failed = 0;
+    for (const gid of groups) {
+      if (gid === String(chatIdMsg)) continue;
+      try { 
+        await send(gid, `📢 *BROADCAST*\n\n${msg}`); 
+        count++; 
+      } catch (e) {
+        failed++;
+      }
+    }
+    return send(chatIdMsg, `✅ Terkirim ke ${count} grup.${failed > 0 ? `\n❌ Gagal: ${failed} grup.` : ""}\n\n_Total grup tersimpan: ${groups.length}_`);
   }
 
   /* =====================
@@ -315,33 +340,66 @@ else if (update.message.entities) {
   }
 
   /* =====================
-     AI COMMANDS
+     AI COMMANDS (FIXED)
   ====================== */
   if (text?.startsWith(".ai ") || text?.startsWith(".gemini ")) {
     const q = text.replace(/^\.(ai|gemini)\s*/, "");
     if (!q) return send(chatIdMsg, "❌ `.ai <pertanyaan>`");
     await send(chatIdMsg, "🔄 Mikir...");
     try {
-      const res = await fetch(`https://api.ryzumi.vip/api/ai/gemini?text=${encodeURIComponent(q)}`).then(r => r.json());
-      if (res.success && res.result) return send(chatIdMsg, `🤖 *Gemini AI*\n\n${res.result}`);
-      return send(chatIdMsg, "❌ Gagal.");
-    } catch { return send(chatIdMsg, "❌ Error API."); }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
+      const res = await fetch(`https://api.ryzumi.vip/api/ai/gemini?text=${encodeURIComponent(q)}`, {
+        signal: controller.signal
+      }).then(r => r.json());
+      
+      clearTimeout(timeoutId);
+      
+      if (res.success && res.result) {
+        return send(chatIdMsg, `🤖 *Gemini AI*\n\n${res.result}`);
+      } else if (res.result) {
+        return send(chatIdMsg, `🤖 *Gemini AI*\n\n${res.result}`);
+      } else {
+        return send(chatIdMsg, `❌ API error: ${res.message || res.error || "Unknown error"}`);
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        return send(chatIdMsg, "❌ Timeout - API terlalu lama merespons.");
+      }
+      return send(chatIdMsg, `❌ Error: ${e.message || "Gagal konek ke API."}`);
+    }
   }
 
+  /* =====================
+     REMINI (FIXED - Returns image directly)
+  ====================== */
   if (text?.startsWith(".remini") || text?.startsWith(".hd")) {
     let imageUrl = "";
+    
     if (update.message.reply_to_message?.photo) {
       const photos = update.message.reply_to_message.photo;
       const fid = photos[photos.length - 1].file_id;
       const file = await getFile(fid);
-      imageUrl = `https://api.telegram.org/file/bot${token}/${file.result.file_path}`;
+      if (file.result?.file_path) {
+        imageUrl = `https://api.telegram.org/file/bot${token}/${file.result.file_path}`;
+      }
     } else {
       const q = text.replace(/^\.(remini|hd)\s*/, "");
-      if (q) imageUrl = q;
+      if (q && q.startsWith("http")) imageUrl = q;
     }
+    
     if (!imageUrl) return send(chatIdMsg, "❌ Reply foto atau `.remini <link>`");
-    await send(chatIdMsg, "🔄 Proses...");
-    return sendPhoto(chatIdMsg, `https://api.ryzumi.vip/api/ai/remini?url=${encodeURIComponent(imageUrl)}`, "✨ HD by Remini");
+    
+    await send(chatIdMsg, "🔄 Memproses HD...");
+    
+    try {
+      // API returns image directly, so pass URL to sendPhoto
+      const apiUrl = `https://api.ryzumi.vip/api/ai/remini?url=${encodeURIComponent(imageUrl)}`;
+      return sendPhoto(chatIdMsg, apiUrl, "✨ HD by Remini");
+    } catch (e) {
+      return send(chatIdMsg, `❌ Error: ${e.message || "Gagal proses gambar."}`);
+    }
   }
 
   /* =====================
