@@ -101,21 +101,41 @@ export async function handleBot(token, update) {
     return r.json();
   }
 
-  // ===== FIXED: Helper untuk extract target user dari reply atau mention =====
+  async function deleteMessage(chatId, messageId) {
+    return fetch(`${API}/deleteMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+    });
+  }
+
+  async function pinMessage(chatId, messageId) {
+    return fetch(`${API}/pinChatMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+    });
+  }
+
+  async function unpinMessage(chatId, messageId) {
+    return fetch(`${API}/unpinChatMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+    });
+  }
+
   async function getTargetUser(message, chatId) {
-    // Prioritas 1: Reply to message
     if (message.reply_to_message && message.reply_to_message.from) {
       return message.reply_to_message.from.id;
     }
     
-    // Prioritas 2: Text mention (user tanpa username)
     if (message.entities) {
       const textMention = message.entities.find(e => e.type === "text_mention");
       if (textMention && textMention.user) {
         return textMention.user.id;
       }
       
-      // Prioritas 3: @username mention
       const mention = message.entities.find(e => e.type === "mention");
       if (mention) {
         const text = message.text || message.caption || "";
@@ -138,13 +158,11 @@ export async function handleBot(token, update) {
     return null;
   }
 
-  // Safety check
   if (!update.message && !update.callback_query) return;
 
   const text = update.message?.text || update.message?.caption;
   const chatIdMsg = update.message?.chat?.id;
 
-  // Simpan member untuk tagall
   if (update.message?.from?.id && (update.message?.chat?.type === "group" || update.message?.chat?.type === "supergroup")) {
     if (!groupMembers[chatIdMsg]) groupMembers[chatIdMsg] = {};
     groupMembers[chatIdMsg][update.message.from.id] = { 
@@ -158,7 +176,7 @@ export async function handleBot(token, update) {
      COMMAND MENU
   ====================== */
   if (text === "/menu" || text === ".menu" || text === "/start" || text === ".help") {
-    return send(chatIdMsg, "*📌 MENU UTAMA - 100+ FITUR*", {
+    return send(chatIdMsg, "*📌 MENU UTAMA - 100+ FITUR*\n\n_Pilih menu di bawah ini:_", {
       inline_keyboard: [
         [{ text: "👥 Menu Grup", callback_data: "menu_grup" }],
         [{ text: "🛠️ Menu Tools", callback_data: "menu_tools" }],
@@ -272,6 +290,53 @@ export async function handleBot(token, update) {
   }
 
   /* =====================
+     NEW: PIN/UNPIN/DELETE MESSAGE
+  ====================== */
+  if (text?.startsWith(".pin")) {
+    if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
+    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan yang mau di-pin.");
+    await pinMessage(chatIdMsg, update.message.reply_to_message.message_id);
+    return send(chatIdMsg, "📌 Pesan berhasil di-pin.");
+  }
+
+  if (text?.startsWith(".unpin")) {
+    if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
+    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan yang mau di-unpin.");
+    await unpinMessage(chatIdMsg, update.message.reply_to_message.message_id);
+    return send(chatIdMsg, "📌 Pesan berhasil di-unpin.");
+  }
+
+  if (text?.startsWith(".del") || text?.startsWith(".delete")) {
+    if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
+    if (!update.message.reply_to_message) return send(chatIdMsg, "❌ Reply pesan yang mau dihapus.");
+    await deleteMessage(chatIdMsg, update.message.reply_to_message.message_id);
+    await deleteMessage(chatIdMsg, update.message.message_id);
+    return;
+  }
+
+  /* =====================
+     NEW: WARN SYSTEM
+  ====================== */
+  const warns = {};
+  if (text?.startsWith(".warn")) {
+    if (!(await isAdmin(chatIdMsg, update.message.from.id))) return send(chatIdMsg, "❌ Bukan admin.");
+    const targetId = await getTargetUser(update.message, chatIdMsg);
+    if (!targetId) return send(chatIdMsg, "❌ Reply pesan user atau tag @username.");
+    if (await isAdmin(chatIdMsg, targetId)) return send(chatIdMsg, "❌ Ga bisa warn admin.");
+    
+    if (!warns[chatIdMsg]) warns[chatIdMsg] = {};
+    if (!warns[chatIdMsg][targetId]) warns[chatIdMsg][targetId] = 0;
+    warns[chatIdMsg][targetId]++;
+    
+    const warnCount = warns[chatIdMsg][targetId];
+    if (warnCount >= 3) {
+      await kick(chatIdMsg, targetId);
+      return send(chatIdMsg, `⚠️ User sudah 3x warn, auto-kick!`);
+    }
+    return send(chatIdMsg, `⚠️ Warned! (${warnCount}/3)`);
+  }
+
+  /* =====================
      SHARELINK/BROADCAST (FIXED)
   ====================== */
   if (text?.startsWith(".sharelink") || text?.startsWith(".broadcast")) {
@@ -340,6 +405,35 @@ export async function handleBot(token, update) {
   }
 
   /* =====================
+     NEW: TRANSLATE
+  ====================== */
+  if (text?.startsWith(".tr ") || text?.startsWith(".translate ")) {
+    const q = text.replace(/^\.(tr|translate)\s*/, "");
+    if (!q) return send(chatIdMsg, "❌ `.tr <teks>`");
+    try {
+      const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(q)}&langpair=auto|id`).then(r => r.json());
+      return send(chatIdMsg, `🌐 *Translate:*\n${res.responseData?.translatedText || "Gagal translate"}`);
+    } catch {
+      return send(chatIdMsg, "❌ Gagal translate.");
+    }
+  }
+
+  /* =====================
+     NEW: CUACA/WEATHER
+  ====================== */
+  if (text?.startsWith(".cuaca ") || text?.startsWith(".weather ")) {
+    const city = text.replace(/^\.(cuaca|weather)\s*/, "");
+    if (!city) return send(chatIdMsg, "❌ `.cuaca <kota>`");
+    try {
+      const res = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`).then(r => r.json());
+      const current = res.current_condition[0];
+      return send(chatIdMsg, `🌤️ *Cuaca ${city}*\n\n🌡️ Suhu: ${current.temp_C}°C\n💧 Kelembaban: ${current.humidity}%\n💨 Angin: ${current.windspeedKmph} km/h\n☁️ Kondisi: ${current.weatherDesc[0].value}`);
+    } catch {
+      return send(chatIdMsg, "❌ Gagal ambil data cuaca.");
+    }
+  }
+
+  /* =====================
      AI COMMANDS (FIXED)
   ====================== */
   if (text?.startsWith(".ai ") || text?.startsWith(".gemini ")) {
@@ -372,7 +466,25 @@ export async function handleBot(token, update) {
   }
 
   /* =====================
-     REMINI (FIXED - Returns image directly)
+     NEW: GPT AI
+  ====================== */
+  if (text?.startsWith(".gpt ") || text?.startsWith(".chatgpt ")) {
+    const q = text.replace(/^\.(gpt|chatgpt)\s*/, "");
+    if (!q) return send(chatIdMsg, "❌ `.gpt <pertanyaan>`");
+    await send(chatIdMsg, "🔄 Mikir...");
+    try {
+      const res = await fetch(`https://api.ryzumi.vip/api/ai/gpt?text=${encodeURIComponent(q)}`).then(r => r.json());
+      if (res.result) {
+        return send(chatIdMsg, `🤖 *ChatGPT*\n\n${res.result}`);
+      }
+      return send(chatIdMsg, "❌ Gagal mendapat respons.");
+    } catch {
+      return send(chatIdMsg, "❌ Error koneksi ke API.");
+    }
+  }
+
+  /* =====================
+     REMINI (FIXED)
   ====================== */
   if (text?.startsWith(".remini") || text?.startsWith(".hd")) {
     let imageUrl = "";
@@ -394,11 +506,42 @@ export async function handleBot(token, update) {
     await send(chatIdMsg, "🔄 Memproses HD...");
     
     try {
-      // API returns image directly, so pass URL to sendPhoto
-      const apiUrl = `https://api.ryzumi.vip/api/ai/remini?url=${encodeURIComponent(imageUrl)}`;
-      return sendPhoto(chatIdMsg, apiUrl, "✨ HD by Remini");
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      
+      const res = await fetch(`https://api.ryzumi.vip/api/ai/remini?url=${encodeURIComponent(imageUrl)}`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!res.ok) {
+        return send(chatIdMsg, `❌ API Error: ${res.status}`);
+      }
+      
+      const contentType = res.headers.get("content-type");
+      
+      if (contentType?.includes("application/json")) {
+        const json = await res.json();
+        if (json.result || json.url || json.data) {
+          const resultUrl = json.result || json.url || json.data;
+          return sendPhoto(chatIdMsg, resultUrl, "✨ HD by Remini");
+        }
+        return send(chatIdMsg, `❌ API Response: ${JSON.stringify(json)}`);
+      } else if (contentType?.includes("image")) {
+        return sendPhoto(chatIdMsg, `https://api.ryzumi.vip/api/ai/remini?url=${encodeURIComponent(imageUrl)}`, "✨ HD by Remini");
+      } else {
+        const text = await res.text();
+        if (text.startsWith("http")) {
+          return sendPhoto(chatIdMsg, text.trim(), "✨ HD by Remini");
+        }
+        return send(chatIdMsg, `❌ Response tidak valid: ${text.substring(0, 100)}`);
+      }
     } catch (e) {
-      return send(chatIdMsg, `❌ Error: ${e.message || "Gagal proses gambar."}`);
+      if (e.name === 'AbortError') {
+        return send(chatIdMsg, "❌ Timeout - Proses terlalu lama.");
+      }
+      return send(chatIdMsg, `❌ Error: ${e.message}`);
     }
   }
 
@@ -426,25 +569,47 @@ export async function handleBot(token, update) {
     return send(chatIdMsg, `🎲 Random (${min}-${max}): *${Math.floor(Math.random() * (max - min + 1)) + min}*`);
   }
   if (text === ".truth") {
-    const t = ["Apa hal paling memalukan?", "Siapa crush kamu?", "Rahasia terbesarmu?", "Pernah bohong ke siapa?", "Ketakutan terbesarmu?", "Hal gila yang pernah dilakukan?"];
+    const t = ["Apa hal paling memalukan?", "Siapa crush kamu?", "Rahasia terbesarmu?", "Pernah bohong ke siapa?", "Ketakutan terbesarmu?", "Hal gila yang pernah dilakukan?", "Pernah suka sama teman sendiri?", "Apa yang kamu sembunyikan dari orang tua?"];
     return send(chatIdMsg, `🤔 *TRUTH:*\n${t[Math.floor(Math.random() * t.length)]}`);
   }
   if (text === ".dare") {
-    const d = ["Kirim 'I love you' ke chat terakhir!", "Post story 'Aku jomblo siapa mau?'", "Voice note nyanyi!", "Ganti PP jadi kocak 1 jam", "Telpon random bilang kangen"];
+    const d = ["Kirim 'I love you' ke chat terakhir!", "Post story 'Aku jomblo siapa mau?'", "Voice note nyanyi!", "Ganti PP jadi kocak 1 jam", "Telpon random bilang kangen", "Screenshot chat terakhir!", "Kirim emoji 💕 ke 5 orang"];
     return send(chatIdMsg, `😈 *DARE:*\n${d[Math.floor(Math.random() * d.length)]}`);
   }
   if (text === ".tebakangka") return send(chatIdMsg, `🔢 Tebak 1-100!\n\n_Jawaban: ||${Math.floor(Math.random() * 100) + 1}||_`);
   if (text === ".tictactoe" || text === ".ttt") return send(chatIdMsg, "⬜⬜⬜\n⬜⬜⬜\n⬜⬜⬜\n\n_Fitur TicTacToe coming soon!_");
+  
+  /* =====================
+     NEW: TEBAK KATA
+  ====================== */
+  if (text === ".tebakkata") {
+    const words = ["JAVASCRIPT", "TELEGRAM", "INDONESIA", "KOMPUTER", "HANDPHONE", "INTERNET", "APLIKASI"];
+    const word = words[Math.floor(Math.random() * words.length)];
+    const hint = word[0] + "_".repeat(word.length - 2) + word[word.length - 1];
+    return send(chatIdMsg, `🎯 *TEBAK KATA*\n\nHint: \`${hint}\`\n\n_Jawaban: ||${word}||_`);
+  }
+
+  /* =====================
+     NEW: MATH QUIZ
+  ====================== */
+  if (text === ".math" || text === ".matematika") {
+    const a = Math.floor(Math.random() * 50) + 1;
+    const b = Math.floor(Math.random() * 50) + 1;
+    const ops = ["+", "-", "*"];
+    const op = ops[Math.floor(Math.random() * ops.length)];
+    const answer = eval(`${a} ${op} ${b}`);
+    return send(chatIdMsg, `🧮 *MATH QUIZ*\n\nBerapa ${a} ${op} ${b} = ?\n\n_Jawaban: ||${answer}||_`);
+  }
 
   /* =====================
      FUN COMMANDS
   ====================== */
   if (text === ".quote" || text === ".quotes") {
-    const q = ["Hidup itu seperti bersepeda. - Einstein", "Jangan menunggu kesempatan, ciptakan. - Shaw", "Sukses adalah guru yang buruk. - Gates", "Jadilah perubahan yang ingin kamu lihat. - Gandhi", "Jangan takut gagal, takutlah tidak mencoba. - MJ"];
+    const q = ["Hidup itu seperti bersepeda. - Einstein", "Jangan menunggu kesempatan, ciptakan. - Shaw", "Sukses adalah guru yang buruk. - Gates", "Jadilah perubahan yang ingin kamu lihat. - Gandhi", "Jangan takut gagal, takutlah tidak mencoba. - MJ", "Kesuksesan adalah hasil dari persiapan. - Seneca", "Waktu adalah aset paling berharga. - Carnegie"];
     return send(chatIdMsg, `💬 *Quote:*\n\n_"${q[Math.floor(Math.random() * q.length)]}"_`);
   }
   if (text === ".fakta" || text === ".fact") {
-    const f = ["Jantung berdetak 100.000x/hari.", "Lumba-lumba tidur mata terbuka.", "Madu tidak pernah busuk.", "Gurita punya 3 jantung.", "Otak 73% air."];
+    const f = ["Jantung berdetak 100.000x/hari.", "Lumba-lumba tidur mata terbuka.", "Madu tidak pernah busuk.", "Gurita punya 3 jantung.", "Otak 73% air.", "Kucing tidur 70% hidupnya.", "Pisang mengandung radiasi.", "Lidah adalah otot terkuat."];
     return send(chatIdMsg, `📖 *Fakta:*\n${f[Math.floor(Math.random() * f.length)]}`);
   }
   if (text?.startsWith(".rate ")) {
@@ -462,8 +627,32 @@ export async function handleBot(token, update) {
     return send(chatIdMsg, z[q] || "❌ Zodiak tidak ditemukan.");
   }
   if (text === ".pantun") {
-    const p = ["Pergi ke pasar beli semangka,\nJangan lupa beli duren,\nKalau kamu memang suka,\nJangan malu bilang cinta.", "Buah mangga buah duku,\nDimakan enak rasanya,\nWalaupun kamu jauh dariku,\nKamu tetap di hatiku."];
+    const p = ["Pergi ke pasar beli semangka,\nJangan lupa beli duren,\nKalau kamu memang suka,\nJangan malu bilang cinta.", "Buah mangga buah duku,\nDimakan enak rasanya,\nWalaupun kamu jauh dariku,\nKamu tetap di hatiku.", "Jalan-jalan ke Surabaya,\nJangan lupa beli oleh-oleh,\nWalaupun hidup penuh lara,\nTetap semangat jangan menyerah."];
     return send(chatIdMsg, `📜 *Pantun:*\n\n${p[Math.floor(Math.random() * p.length)]}`);
+  }
+
+  /* =====================
+     NEW: MEME
+  ====================== */
+  if (text === ".meme") {
+    try {
+      const res = await fetch("https://meme-api.com/gimme").then(r => r.json());
+      if (res.url) {
+        return sendPhoto(chatIdMsg, res.url, `😂 ${res.title || "Random Meme"}`);
+      }
+      return send(chatIdMsg, "❌ Gagal ambil meme.");
+    } catch {
+      return send(chatIdMsg, "❌ Error koneksi.");
+    }
+  }
+
+  /* =====================
+     NEW: STICKER TEXT
+  ====================== */
+  if (text?.startsWith(".stext ")) {
+    const q = text.replace(".stext ", "");
+    if (!q) return send(chatIdMsg, "❌ `.stext <teks>`");
+    return send(chatIdMsg, `✨ *${q}* ✨\n\n_Fitur sticker text coming soon!_`);
   }
 
   /* =====================
@@ -478,6 +667,15 @@ export async function handleBot(token, update) {
     const u = process.uptime();
     return send(chatIdMsg, `⏱️ *Uptime:* ${Math.floor(u / 3600)}j ${Math.floor((u % 3600) / 60)}m ${Math.floor(u % 60)}s`);
   }
+  
+  /* =====================
+     NEW: GROUP INFO
+  ====================== */
+  if (text === ".groupinfo" || text === ".gc") {
+    const chat = update.message.chat;
+    const memberCount = Object.keys(groupMembers[chatIdMsg] || {}).length;
+    return send(chatIdMsg, `👥 *Info Grup*\n\n📛 Nama: ${chat.title || "-"}\n🆔 ID: \`${chat.id}\`\n👤 Members (aktif): ${memberCount}\n📝 Type: ${chat.type}`);
+  }
 
   /* =====================
      DOWNLOAD (Placeholder)
@@ -485,30 +683,152 @@ export async function handleBot(token, update) {
   if (text?.startsWith(".tiktok ") || text?.startsWith(".tt ")) return send(chatIdMsg, "🔄 Fitur TikTok coming soon...");
   if (text?.startsWith(".ig ") || text?.startsWith(".instagram ")) return send(chatIdMsg, "🔄 Fitur Instagram coming soon...");
   if (text?.startsWith(".yt ") || text?.startsWith(".youtube ")) return send(chatIdMsg, "🔄 Fitur YouTube coming soon...");
+  if (text?.startsWith(".spotify ")) return send(chatIdMsg, "🔄 Fitur Spotify coming soon...");
+  if (text?.startsWith(".pinterest ")) return send(chatIdMsg, "🔄 Fitur Pinterest coming soon...");
 
   /* =====================
-     CALLBACK MENU
+     CALLBACK MENU (FIXED - SEMUA MENU)
   ====================== */
   if (!update.callback_query) return;
 
   const chatId = update.callback_query.message.chat.id;
+  const msgId = update.callback_query.message.message_id;
   const d = update.callback_query.data;
 
+  // Answer callback to remove loading
+  await fetch(`${API}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: update.callback_query.id })
+  });
+
   if (d === "menu_grup") {
-    return send(chatId, "*👥 MENU GRUP*", {
+    return send(chatId, "*👥 MENU GRUP*\n\n_Kelola grup dengan mudah:_", {
       inline_keyboard: [
-        [{ text: "📣 Tag All", callback_data: "grup_tagall" }],
-        [{ text: "⚠️ Kick/Ban", callback_data: "grup_kick" }],
-        [{ text: "🔇 Mute/Unmute", callback_data: "grup_mute" }],
-        [{ text: "👮 Promote/Demote", callback_data: "grup_promote" }],
-        [{ text: "📢 Broadcast", callback_data: "grup_broadcast" }],
+        [{ text: "📣 Tag All", callback_data: "help_tagall" }, { text: "⚠️ Kick/Ban", callback_data: "help_kick" }],
+        [{ text: "🔇 Mute/Unmute", callback_data: "help_mute" }, { text: "👮 Promote/Demote", callback_data: "help_promote" }],
+        [{ text: "📌 Pin/Unpin", callback_data: "help_pin" }, { text: "🗑️ Delete", callback_data: "help_delete" }],
+        [{ text: "⚠️ Warn", callback_data: "help_warn" }, { text: "📢 Broadcast", callback_data: "help_broadcast" }],
         [{ text: "⬅️ Kembali", callback_data: "back_main" }]
       ]
     });
   }
 
+  if (d === "menu_tools") {
+    return send(chatId, "*🛠️ MENU TOOLS*\n\n_Tools berguna:_", {
+      inline_keyboard: [
+        [{ text: "🔐 Encode/Decode", callback_data: "help_encode" }],
+        [{ text: "🖼️ Get PP", callback_data: "help_getpp" }],
+        [{ text: "🧮 Calculator", callback_data: "help_calc" }],
+        [{ text: "🎨 Sticker to Image", callback_data: "help_toimg" }],
+        [{ text: "🌐 Translate", callback_data: "help_translate" }],
+        [{ text: "🌤️ Cuaca", callback_data: "help_cuaca" }],
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  if (d === "menu_ai") {
+    return send(chatId, "*🤖 MENU AI*\n\n_AI Powered Features:_", {
+      inline_keyboard: [
+        [{ text: "🤖 Gemini AI", callback_data: "help_gemini" }],
+        [{ text: "💬 ChatGPT", callback_data: "help_gpt" }],
+        [{ text: "✨ Remini HD", callback_data: "help_remini" }],
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  if (d === "menu_game") {
+    return send(chatId, "*🎮 MENU GAME*\n\n_Games seru:_", {
+      inline_keyboard: [
+        [{ text: "🎲 Dadu", callback_data: "help_dadu" }, { text: "🪙 Flip Coin", callback_data: "help_flip" }],
+        [{ text: "🐚 Kerang Ajaib", callback_data: "help_kerang" }, { text: "🎰 Slot", callback_data: "help_slot" }],
+        [{ text: "✊ Suit", callback_data: "help_suit" }, { text: "🔢 Random", callback_data: "help_random" }],
+        [{ text: "🤔 Truth", callback_data: "help_truth" }, { text: "😈 Dare", callback_data: "help_dare" }],
+        [{ text: "🎯 Tebak Kata", callback_data: "help_tebakkata" }, { text: "🧮 Math Quiz", callback_data: "help_math" }],
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  if (d === "menu_fun") {
+    return send(chatId, "*🔮 MENU FUN*\n\n_Fitur hiburan:_", {
+      inline_keyboard: [
+        [{ text: "💬 Quote", callback_data: "help_quote" }, { text: "📖 Fakta", callback_data: "help_fakta" }],
+        [{ text: "⭐ Rate", callback_data: "help_rate" }, { text: "💕 Ship", callback_data: "help_ship" }],
+        [{ text: "✨ Ganteng/Cantik", callback_data: "help_ganteng" }, { text: "♈ Zodiak", callback_data: "help_zodiak" }],
+        [{ text: "📜 Pantun", callback_data: "help_pantun" }, { text: "😂 Meme", callback_data: "help_meme" }],
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  if (d === "menu_download") {
+    return send(chatId, "*📥 MENU DOWNLOAD*\n\n_Download media:_", {
+      inline_keyboard: [
+        [{ text: "🎵 TikTok", callback_data: "help_tiktok" }],
+        [{ text: "📸 Instagram", callback_data: "help_ig" }],
+        [{ text: "🎬 YouTube", callback_data: "help_yt" }],
+        [{ text: "🎧 Spotify", callback_data: "help_spotify" }],
+        [{ text: "📌 Pinterest", callback_data: "help_pinterest" }],
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  if (d === "menu_info") {
+    return send(chatId, "*ℹ️ INFO BOT*\n\n🤖 *Telegram Bot Multi-Fitur*\n\n📦 Version: 2.0\n👨‍💻 Features: 100+\n⚡ Status: Online\n\n_Commands:_\n`.info` - Info user\n`.ping` - Check bot\n`.runtime` - Uptime\n`.groupinfo` - Info grup", {
+      inline_keyboard: [
+        [{ text: "⬅️ Kembali", callback_data: "back_main" }]
+      ]
+    });
+  }
+
+  // HELP CALLBACKS
+  if (d === "help_tagall") return send(chatId, "*📣 TAG ALL*\n\nCommand: `.tagall`\n\nTag semua member yang pernah chat di grup.\n\n⚠️ Hanya admin.");
+  if (d === "help_kick") return send(chatId, "*⚠️ KICK/BAN*\n\nCommand:\n`.kick` - Kick user\n`.ban` - Ban user\n`.unban` - Unban user\n\n_Reply pesan atau tag @user_");
+  if (d === "help_mute") return send(chatId, "*🔇 MUTE/UNMUTE*\n\nCommand:\n`.mute` - Mute 1 jam\n`.unmute` - Unmute user\n\n_Reply pesan user_");
+  if (d === "help_promote") return send(chatId, "*👮 PROMOTE/DEMOTE*\n\nCommand:\n`.promote` - Jadikan admin\n`.demote` - Hapus admin\n\n_Reply pesan user_");
+  if (d === "help_pin") return send(chatId, "*📌 PIN/UNPIN*\n\nCommand:\n`.pin` - Pin pesan\n`.unpin` - Unpin pesan\n\n_Reply pesan yang mau di-pin_");
+  if (d === "help_delete") return send(chatId, "*🗑️ DELETE*\n\nCommand: `.del` atau `.delete`\n\nHapus pesan.\n\n_Reply pesan yang mau dihapus_");
+  if (d === "help_warn") return send(chatId, "*⚠️ WARN*\n\nCommand: `.warn`\n\nWarn user (3x = auto kick)\n\n_Reply pesan user_");
+  if (d === "help_broadcast") return send(chatId, "*📢 BROADCAST*\n\nCommand: `.broadcast <pesan>`\n\nKirim pesan ke semua grup.\n\n⚠️ Hanya admin.");
+  if (d === "help_encode") return send(chatId, "*🔐 ENCODE/DECODE*\n\nCommand:\n`.enc <teks>` - Encode Base64\n`.dec <teks>` - Decode Base64");
+  if (d === "help_getpp") return send(chatId, "*🖼️ GET PP*\n\nCommand: `.getpp` atau `.pp`\n\nAmbil foto profil.\n\n_Reply pesan user atau tanpa reply untuk PP sendiri_");
+  if (d === "help_calc") return send(chatId, "*🧮 CALCULATOR*\n\nCommand: `.calc <expr>`\n\nContoh: `.calc 10+5*2`");
+  if (d === "help_toimg") return send(chatId, "*🎨 STICKER TO IMAGE*\n\nCommand: `.toimg`\n\n_Reply sticker biasa (non-animated)_");
+  if (d === "help_translate") return send(chatId, "*🌐 TRANSLATE*\n\nCommand: `.tr <teks>`\n\nTranslate ke Bahasa Indonesia.");
+  if (d === "help_cuaca") return send(chatId, "*🌤️ CUACA*\n\nCommand: `.cuaca <kota>`\n\nCek cuaca kota tertentu.");
+  if (d === "help_gemini") return send(chatId, "*🤖 GEMINI AI*\n\nCommand: `.ai <pertanyaan>`\n\nTanya apa saja ke Gemini AI.");
+  if (d === "help_gpt") return send(chatId, "*💬 CHATGPT*\n\nCommand: `.gpt <pertanyaan>`\n\nTanya apa saja ke ChatGPT.");
+  if (d === "help_remini") return send(chatId, "*✨ REMINI HD*\n\nCommand: `.remini` atau `.hd`\n\nUpgrade foto jadi HD.\n\n_Reply foto atau kirim link_");
+  if (d === "help_dadu") return send(chatId, "*🎲 DADU*\n\nCommand: `.dadu` atau `.dice`\n\nLempar dadu 1-6.");
+  if (d === "help_flip") return send(chatId, "*🪙 FLIP COIN*\n\nCommand: `.koin` atau `.flip`\n\nLempar koin (kepala/ekor).");
+  if (d === "help_kerang") return send(chatId, "*🐚 KERANG AJAIB*\n\nCommand: `.kerang`\n\nTanya kerang ajaib!");
+  if (d === "help_slot") return send(chatId, "*🎰 SLOT*\n\nCommand: `.slot`\n\nMain slot machine!");
+  if (d === "help_suit") return send(chatId, "*✊ SUIT*\n\nCommand: `.suit` atau `.rps`\n\nMain batu gunting kertas.");
+  if (d === "help_random") return send(chatId, "*🔢 RANDOM*\n\nCommand: `.random <min> <max>`\n\nAngka random antara min-max.");
+  if (d === "help_truth") return send(chatId, "*🤔 TRUTH*\n\nCommand: `.truth`\n\nDapat pertanyaan truth!");
+  if (d === "help_dare") return send(chatId, "*😈 DARE*\n\nCommand: `.dare`\n\nDapat tantangan dare!");
+  if (d === "help_tebakkata") return send(chatId, "*🎯 TEBAK KATA*\n\nCommand: `.tebakkata`\n\nGame tebak kata dengan hint.");
+  if (d === "help_math") return send(chatId, "*🧮 MATH QUIZ*\n\nCommand: `.math`\n\nQuiz matematika.");
+  if (d === "help_quote") return send(chatId, "*💬 QUOTE*\n\nCommand: `.quote`\n\nDapat quote motivasi.");
+  if (d === "help_fakta") return send(chatId, "*📖 FAKTA*\n\nCommand: `.fakta`\n\nDapat fakta unik.");
+  if (d === "help_rate") return send(chatId, "*⭐ RATE*\n\nCommand: `.rate <sesuatu>`\n\nRating 0-100.");
+  if (d === "help_ship") return send(chatId, "*💕 SHIP*\n\nCommand: `.ship`\n\nLove meter 0-100%.");
+  if (d === "help_ganteng") return send(chatId, "*✨ GANTENG/CANTIK*\n\nCommand: `.ganteng` atau `.cantik`\n\nMeter 0-100%.\n\n_Reply pesan user_");
+  if (d === "help_zodiak") return send(chatId, "*♈ ZODIAK*\n\nCommand: `.zodiak <zodiak>`\n\nInfo zodiak.");
+  if (d === "help_pantun") return send(chatId, "*📜 PANTUN*\n\nCommand: `.pantun`\n\nDapat pantun random.");
+  if (d === "help_meme") return send(chatId, "*😂 MEME*\n\nCommand: `.meme`\n\nDapat meme random.");
+  if (d === "help_tiktok") return send(chatId, "*🎵 TIKTOK*\n\nCommand: `.tiktok <url>`\n\nDownload video TikTok.\n\n⚠️ Coming soon!");
+  if (d === "help_ig") return send(chatId, "*📸 INSTAGRAM*\n\nCommand: `.ig <url>`\n\nDownload media IG.\n\n⚠️ Coming soon!");
+  if (d === "help_yt") return send(chatId, "*🎬 YOUTUBE*\n\nCommand: `.yt <url>`\n\nDownload YouTube.\n\n⚠️ Coming soon!");
+  if (d === "help_spotify") return send(chatId, "*🎧 SPOTIFY*\n\nCommand: `.spotify <url>`\n\nDownload Spotify.\n\n⚠️ Coming soon!");
+  if (d === "help_pinterest") return send(chatId, "*📌 PINTEREST*\n\nCommand: `.pinterest <url>`\n\nDownload Pinterest.\n\n⚠️ Coming soon!");
+
   if (d === "back_main") {
-    return send(chatId, "*📌 MENU UTAMA - 100+ FITUR*", {
+    return send(chatId, "*📌 MENU UTAMA - 100+ FITUR*\n\n_Pilih menu di bawah ini:_", {
       inline_keyboard: [
         [{ text: "👥 Menu Grup", callback_data: "menu_grup" }],
         [{ text: "🛠️ Menu Tools", callback_data: "menu_tools" }],
