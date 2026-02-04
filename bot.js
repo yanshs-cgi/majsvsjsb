@@ -1,5 +1,7 @@
 const groupMembers = {};
 const visitedGroups = {};
+const { LocalStorage } = require('node-localstorage');
+const localStorage = new LocalStorage('./storage');
 
 export async function handleBot(token, update) {
   const API = `https://api.telegram.org/bot${token}`;
@@ -436,34 +438,74 @@ export async function handleBot(token, update) {
   /* =====================
      AI COMMANDS (FIXED)
   ====================== */
-  if (text?.startsWith(".ai ") || text?.startsWith(".gemini ")) {
-    const q = text.replace(/^\.(ai|gemini)\s*/, "");
-    if (!q) return send(chatIdMsg, "❌ `.ai <pertanyaan>`");
-    await send(chatIdMsg, "🔄 Mikir...");
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      
-      const res = await fetch(`https://api.ryzumi.vip/api/ai/gemini?text=${encodeURIComponent(q)}`, {
-        signal: controller.signal
-      }).then(r => r.json());
-      
-      clearTimeout(timeoutId);
-      
-      if (res.success && res.result) {
-        return send(chatIdMsg, `🤖 *Gemini AI*\n\n${res.result}`);
-      } else if (res.result) {
-        return send(chatIdMsg, `🤖 *Gemini AI*\n\n${res.result}`);
-      } else {
-        return send(chatIdMsg, `❌ API error: ${res.message || res.error || "Unknown error"}`);
-      }
-    } catch (e) {
-      if (e.name === 'AbortError') {
-        return send(chatIdMsg, "❌ Timeout - API terlalu lama merespons.");
-      }
-      return send(chatIdMsg, `❌ Error: ${e.message || "Gagal konek ke API."}`);
+/* =====================
+AI COMMANDS (FIXED)
+====================== */
+if (text?.startsWith(".ai ") || text?.startsWith(".gemini ")) {
+  const q = text.replace(/^\.(ai|gemini)\s*/, "");
+  if (!q) return send(chatIdMsg, "❌ `.ai <pertanyaan>`");
+
+  // Inisialisasi riwayat chat dan sesi per pengguna/grup
+  const chatKey = `${chatIdMsg}_${update.message.from.id}`;
+  let chatLog = JSON.parse(localStorage.getItem(`geminiChatLog_${chatKey}`)) || [];
+  let chatSession = localStorage.getItem(`geminiSession_${chatKey}`) || null;
+
+  await send(chatIdMsg, "🔄 Mikir...");
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    // Tambahkan pesan pengguna ke riwayat
+    const now = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    chatLog.push({ sender: 'user', text: q, time: now });
+
+    // Siapkan konteks lengkap seperti pada HTML
+    let context = 'Kamu adalah ai bebas seperti \n';
+    context += 'Riwayat Percakapan:\n';
+    chatLog.forEach(entry => {
+      context += `${entry.sender === 'user' ? 'Pengguna' : 'AI'}: ${entry.text}\n`;
+    });
+    context += `\nPengguna baru saja bertanya: ${q}\nJawab dengan merujuk riwayat di atas!`;
+
+    // Kirim permintaan seperti pada HTML (menggunakan URLSearchParams dan GET)
+    const apiUrl = "https://api.ryzumi.vip/api/ai/gemini"; // URL yang sama dengan HTML
+    const params = new URLSearchParams();
+    params.append('text', context);
+    if (chatSession) params.append('session', chatSession);
+
+    const res = await fetch(`${apiUrl}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    // Bersihkan balasan AI dari teks tak perlu
+    let aiReply = data.result || (data.success ? data.result : "Maaf, saya tidak mengerti.");
+    aiReply = aiReply.replace(/prompt:/gi, '').replace(/result:/gi, '').trim();
+
+    // Simpan balasan AI ke riwayat
+    chatLog.push({ sender: 'ai', text: aiReply, time: now });
+    if (data.session) {
+      chatSession = data.session;
+      localStorage.setItem(`geminiSession_${chatKey}`, chatSession);
     }
+    localStorage.setItem(`geminiChatLog_${chatKey}`, JSON.stringify(chatLog));
+
+    return send(chatIdMsg, `🤖 *Gemini AI*\\n\\n${aiReply}`);
+ // Perbaiki escape karakter
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') {
+      return send(chatIdMsg, "❌ Timeout - API terlalu lama merespons.");
+    }
+    return send(chatIdMsg, `❌ Error: ${e.message || "Gagal konek ke API."}`);
   }
+}
+
+
 
   /* =====================
      NEW: GPT AI
