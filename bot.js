@@ -435,73 +435,85 @@ export async function handleBot(token, update) {
     }
   }
 
-  /* =====================
-     AI COMMANDS (FIXED)
-  ====================== */
 /* =====================
-AI COMMANDS (FIXED)
+   AI COMMANDS (FIXED & STABLE)
 ====================== */
 if (text?.startsWith(".ai ") || text?.startsWith(".gemini ")) {
   const q = text.replace(/^\.(ai|gemini)\s*/, "");
   if (!q) return send(chatIdMsg, "❌ `.ai <pertanyaan>`");
 
-  // Inisialisasi riwayat chat dan sesi per pengguna/grup
   const chatKey = `${chatIdMsg}_${update.message.from.id}`;
   let chatLog = JSON.parse(localStorage.getItem(`geminiChatLog_${chatKey}`)) || [];
   let chatSession = localStorage.getItem(`geminiSession_${chatKey}`) || null;
 
-  await send(chatIdMsg, "🔄 Mikir...");
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+  await send(chatIdMsg, "🔄 Gemini sedang berpikir... (Mohon tunggu)");
 
-    // Tambahkan pesan pengguna ke riwayat
+  const controller = new AbortController();
+  // Menaikkan timeout menjadi 60 detik sesuai permintaan
+  const timeoutId = setTimeout(() => controller.abort(), 60000); 
+
+  try {
     const now = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     chatLog.push({ sender: 'user', text: q, time: now });
 
-    // Siapkan konteks lengkap seperti pada HTML
-    let context = 'Kamu adalah ai bebas seperti \n';
+    // Siapkan konteks
+    let context = 'Kamu adalah AI asisten yang cerdas.\n';
     context += 'Riwayat Percakapan:\n';
-    chatLog.forEach(entry => {
+    chatLog.slice(-5).forEach(entry => { // Ambil 5 chat terakhir saja agar tidak kepanjangan
       context += `${entry.sender === 'user' ? 'Pengguna' : 'AI'}: ${entry.text}\n`;
     });
-    context += `\nPengguna baru saja bertanya: ${q}\nJawab dengan merujuk riwayat di atas!`;
+    context += `\nPengguna baru saja bertanya: ${q}`;
 
-    // Kirim permintaan seperti pada HTML (menggunakan URLSearchParams dan GET)
-    const apiUrl = "https://api.ryzumi.vip/api/ai/gemini"; // URL yang sama dengan HTML
+    const apiUrl = "https://api.ryzumi.vip/api/ai/gemini";
     const params = new URLSearchParams();
     params.append('text', context);
     if (chatSession) params.append('session', chatSession);
 
     const res = await fetch(`${apiUrl}?${params.toString()}`, {
       method: 'GET',
-      headers: { 'Accept': 'application/json' },
+      headers: { 
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0' // Menambah User-Agent agar tidak dianggap bot oleh server
+      },
       signal: controller.signal
     });
 
     clearTimeout(timeoutId);
+
+    // Cek apakah responnya OK sebelum parsing JSON
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Server Error (${res.status})`);
+    }
+
     const data = await res.json();
 
-    // Bersihkan balasan AI dari teks tak perlu
     let aiReply = data.result || (data.success ? data.result : "Maaf, saya tidak mengerti.");
     aiReply = aiReply.replace(/prompt:/gi, '').replace(/result:/gi, '').trim();
 
-    // Simpan balasan AI ke riwayat
     chatLog.push({ sender: 'ai', text: aiReply, time: now });
+    
     if (data.session) {
-      chatSession = data.session;
-      localStorage.setItem(`geminiSession_${chatKey}`, chatSession);
+      localStorage.setItem(`geminiSession_${chatKey}`, data.session);
     }
-    localStorage.setItem(`geminiChatLog_${chatKey}`, JSON.stringify(chatLog));
+    localStorage.setItem(`geminiChatLog_${chatKey}`, JSON.stringify(chatLog.slice(-10))); // Simpan 10 riwayat saja
 
-    return send(chatIdMsg, `🤖 *Gemini AI*\\n\\n${aiReply}`);
- // Perbaiki escape karakter
+    return send(chatIdMsg, `🤖 *Gemini AI*\n\n${aiReply}`);
+
   } catch (e) {
     clearTimeout(timeoutId);
+    console.error("AI Error:", e);
+    
     if (e.name === 'AbortError') {
-      return send(chatIdMsg, "❌ Timeout - API terlalu lama merespons.");
+      return send(chatIdMsg, "❌ *Timeout!* API terlalu lama merespons (lebih dari 60 detik).");
     }
-    return send(chatIdMsg, `❌ Error: ${e.message || "Gagal konek ke API."}`);
+    
+    // Jika error karena JSON (yang kamu alami), berikan pesan yang lebih jelas
+    if (e.message.includes("is not valid JSON") || e.message.includes("Unexpected token")) {
+      return send(chatIdMsg, "❌ *API Error!* Server API sedang gangguan atau mengirimkan format yang salah (HTML). Coba lagi nanti.");
+    }
+
+    return send(chatIdMsg, `❌ *Error:* ${e.message}`);
   }
 }
 
