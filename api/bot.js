@@ -1,10 +1,17 @@
-import fetch from "node-fetch";
-
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  if (req.method !== "POST") return res.status(405).json({error:"Method not allowed"});
+  res.setHeader("Content-Type", "application/json");
 
-  const body = req.body;
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  // Parse body aman
+  let body;
+  try {
+    body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+  } catch (e) {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+
   const userMsg = body?.query?.message || "tidak ada pesan";
 
   try {
@@ -21,13 +28,13 @@ export default async function handler(req, res) {
       })
     });
 
-    const aiData = await aiResp.text(); // atau json kalau output JSON
+    const aiData = await aiResp.text();
 
     res.status(200).json({
       replies: [{ message: aiData }]
     });
 
-  } catch(e) {
-    res.status(500).json({ replies: [{ message: "Error: "+e.message }] });
+  } catch (e) {
+    res.status(500).json({ replies: [{ message: "Error: " + e.message }] });
   }
 }
